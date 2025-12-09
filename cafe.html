@@ -1,0 +1,545 @@
+<!-- 
+  Mapresso (雙北咖啡廳資訊網站)
+  更新紀錄：
+  1. 移除所有 Firebase Firestore 相關程式碼，改為純本機資料管理。
+  2. 「我的收藏」功能現在使用瀏覽器的 localStorage 進行本地儲存。
+  3. 移除使用者認證與 ID 顯示。
+-->
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapresso: 一鍵抵達，你想找的那間咖啡廳 | 雙北咖啡地圖</title>
+    
+    <!-- 1. 載入 Google Fonts: Noto Serif TC (標題用) 與 Noto Sans TC (內文用) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500&family=Noto+Serif+TC:wght@600;700&display=swap" rel="stylesheet">
+    
+    <!-- 載入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 載入 Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- 設定 Tailwind 配置 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'apricot': '#F5EDE2', // 淺杏色
+                        'deep-brown': '#4A2E2A', // 深咖啡棕
+                        'icy-blue': '#A9D7E0', // 冰薄荷藍
+                    },
+                    fontFamily: {
+                        // 內文維持無襯線體 (現代、乾淨)
+                        sans: ['"Noto Sans TC"', 'Inter', 'sans-serif'],
+                        // 標題改用襯線體 (文藝、優雅)
+                        serif: ['"Noto Serif TC"', 'serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        /* 整體風格設定 */
+        body {
+            font-family: 'Noto Sans TC', sans-serif; /* 預設內文 */
+            background-color: #F5EDE2;
+            color: #4A2E2A;
+        }
+        /* 文藝感滾動條 */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #A9D7E0;
+            border-radius: 4px;
+        }
+        .modal-overlay {
+            background-color: rgba(74, 46, 42, 0.8);
+            backdrop-filter: blur(4px);
+        }
+        #favorites-section:empty {
+            /* 為了確保在收藏列表為空時，仍顯示標題和提示 */
+            /* 故不使用 :empty */
+        }
+    </style>
+</head>
+<body class="min-h-screen antialiased">
+
+    <!-- 移除 Firebase SDK 相關程式碼，改為純 JavaScript 處理資料 -->
+    <script>
+        window.cafes = [];
+        window.favorites = {};
+        
+        // LocalStorage Key
+        const FAVORITES_KEY = 'mapresso_local_favorites';
+
+        // --- 本地資料管理函式 ---
+
+        /** 載入本地收藏資料 */
+        const loadLocalFavorites = () => {
+            try {
+                const stored = localStorage.getItem(FAVORITES_KEY);
+                window.favorites = stored ? JSON.parse(stored) : {};
+            } catch (e) {
+                console.error("無法載入本地收藏資料:", e);
+                window.favorites = {};
+            }
+        };
+
+        /** 儲存本地收藏資料 */
+        const saveLocalFavorites = () => {
+            try {
+                localStorage.setItem(FAVORITES_KEY, JSON.stringify(window.favorites));
+            } catch (e) {
+                console.error("無法儲存本地收藏資料:", e);
+            }
+        };
+
+        // Mock Data (硬編碼的城市資料)
+        const mockCafesData = [
+            {
+                id: 1, name: "鄰居 • Le Voisin", district: "信義區", tags: ["預約制", "平日不限時", "居家風格", "法式輕食"],
+                category: "拍照打卡", feature: "打造居家風格裝潢，氣氛佳適合拍照與放鬆",
+                desc: "Le Voisin-信義區後山埤預約制咖啡廳 居家風格的法式輕食", low_cost: "每人低消300元/120分鐘",
+                notice: "如果擔心與不認識的人併桌<br>建議3~4朋友一同前往", hours: "營業時間11:00～21:00<br>（週四公休及每週三至18點）",
+                address: "臺北市信義區松山路287巷42號1樓", image: "https://www.popdaily.com.tw/shaper/u/202307/00337a79-1be6-428c-8464-13019fdcc17e.jpeg?resize-w=1700&resize-h=884&format=webp"
+            },
+            {
+                id: 2, name: "喜鵲咖啡", district: "大安區", tags: ["不限時", "有插座", "僅收現金", "適合工作"],
+                category: "讀書辦公", feature: "不限時可讀書久坐，主打自家烘焙",
+                desc: "愜意的咖啡廳，販售糕點、肉桂捲和三明治等輕食，另有咖啡和茶飲。", low_cost: "低消一杯飲品",
+                notice: "喜鵲咖啡門前的騎樓區域是不可以抽菸的～<br>僅收現金要注意呦!!", hours: "每日 13:00–22:45",
+                address: "臺北市大安區羅斯福路三段269巷74號", image: "https://whos-talking.com/wp-content/uploads/2024/09/DSC_4882-%E5%B7%B2%E5%A2%9E%E5%BC%B7-%E9%9B%9C%E8%A8%8A%E6%B8%9B%E5%B0%91-1-2048x1365.jpg"
+            },
+            {
+                id: 3, name: "clip coffee Taipei", district: "松山區", tags: ["不限時", "寵物友善", "文青氛圍", "複合式空間"],
+                category: "聊天聚會", feature: "以木質調裝潢為主，創造溫暖又舒適的氛圍",
+                desc: "甜點好吃、咖啡品質穩定，空間不限時又寵物友善，不管是想放鬆還是跟朋友聊天都很適合。", low_cost: "一杯飲品",
+                notice: "客滿限時90分鐘<br>從南京開來台北的咖啡廳", hours: "週二至週日 09:00–18:00",
+                address: "臺北市松山區新中街6巷3號1樓", image: "https://damei17.com/wp-content/uploads/2024/09/clip-coffee-Taipei-14.jpg"
+            },
+            {
+                id: 4, name: "造糕的人", district: "中山區", tags: ["蛋糕", "有趣搞怪", "y2k", "復古可愛"],
+                category: "特色飲品", feature: "不算太糟糕的人 但 製造蛋糕專門。",
+                desc: "造糕的人是一家主打首座蛋糕的咖啡廳。品牌宗旨就是開心第一，裝潢包括蛋糕都帶有一點「抽象」的詼諧復古風格。喜歡搞怪的話，那你一定不能錯過這家又怪又可愛的店！", low_cost: "一杯飲品",
+                notice: "每週一、二無內用，只開放自取蛋糕", hours: "週三至週日 13:00-19:00",
+                address: "臺北市中山區長安東路一段45之2號2樓", image: "https://img.girlstalk.cc/images/author/Melody/%E9%80%A0%E7%B3%95%E7%9A%84%E4%BA%BA0001.jpg"
+            },
+            {
+                id: 5, name: "疍宅Egghost三元店", district: "中正區", tags: ["戚風蛋糕", "日系木質調", "不限時"],
+                category: "聊天聚會", feature: "「疍」=「蛋」是甜點ㄉ靈魂，我們是宅希望你來就像回到家",
+                desc: "「疍宅」誕生於三個人的信念——對美的敏銳、對自由的執著、對溫柔的堅持。我們相信，最純粹的滋味來自最樸實的食材。", low_cost: "訂位低消「1＋1」：每人一杯飲品＋一份餐點",
+                notice: "不定期公休<br>只限貓咪能進入內！有🐱店長", hours: "週一至週四12:00-21:00/週五至週日12:00-23:00 ",
+                address: "臺北市中正區三元街176號1樓", image: "https://www.jeremyfoodie.tw/wp-content/uploads/2024/07/20240715_191333-2.jpg"
+            },
+            {
+                id: 6, name: "LEIBLE COFFEE", district: "士林區", tags: ["澳式咖啡", "咖啡冠軍", "清新森系"],
+                category: "特色飲品", feature: "澳洲精品咖啡「LEIBLE COFFEE」登台首店",
+                desc: "採用獨棟裝潢，延續品牌標誌性的鼠尾草綠搭配及多層舒適空間，賦予店內慢悠愜意的氛圍，為咖啡愛好者打造台北全新咖啡文化集散地！", low_cost: "一杯飲品",
+                notice: "台北限定菜單，冰奶油咖啡、季節限定的荔枝冷萃咖啡", hours: "每日 11:00-19:00",
+                address: "台北市士林區文林路294號", image: "https://hips.hearstapps.com/hmg-prod/images/c-66ac808293441.jpg?crop=1.00xw:1.00xh;0,0&resize=1400:*"
+            },
+            {
+                id: 7, name: "日豐企業社", district: "新莊區", tags: ["工業風格", "車廠改造", "戚風蛋糕"],
+                category: "特色飲品", feature: "新莊最知名的咖啡廳之一，是間結合修車廠的咖啡廳。",
+                desc: "在修車廠內吃甜點？違和但有趣。裝潢呈現老式工業風格，新莊高人氣戚風蛋糕神店。", low_cost: "一杯飲品",
+                notice: "無接受訂位，可預留甜點<br>若有人候位，限時一小時", hours: "13:00-1８:00(週一公休)",
+                address: "新北市新莊區中華路二段33號", image: "https://yes.rita-life.com/upload/202208/04/IMG_3221.jpg"
+            },
+            {
+                id: 8, name: "", district: "士林區", tags: ["澳式咖啡", "咖啡冠軍", "清新森系"],
+                category: "聊天聚會", feature: "澳洲精品咖啡「LEIBLE COFFEE」登台首店",
+                desc: "採用獨棟裝潢，延續品牌標誌性的鼠尾草綠搭配及多層舒適空間，賦予店內慢悠愜意的氛圍，為咖啡愛好者打造台北全新咖啡文化集散地！", low_cost: "一杯飲品",
+                notice: "台北限定菜單，冰奶油咖啡、季節限定的荔枝冷萃咖啡", hours: "每日 11:00-19:00",
+                address: "台北市士林區文林路294號", image: "https://hips.hearstapps.com/hmg-prod/images/c-66ac808293441.jpg?crop=1.00xw:1.00xh;0,0&resize=1400:*"
+            },
+            {
+                id: 9, name: "特有種商行", district: "中正區", tags: ["電影道具", "魏得聖", "寵物友善"],
+                category: "讀書辦公", feature: "金馬獎導演魏德聖的電影展示間",
+                desc: "這間綠意盎然的咖啡館以懷舊電影道具裝飾為特色，供應咖啡、茶飲、當地輕食，並販售電影周邊商品。！", low_cost: "一杯飲品或餐點",
+                notice: "不限時，無服務費，附wifi<br>店內展示魏導電影道具及手稿～", hours: "每日 11:30-21:30",
+                address: "臺北市中正區臨沂街27巷4-1號", image: "https://rocky.tw/wp-content/uploads/%E7%89%B9%E6%9C%89%E7%A8%AE%E5%95%86%E8%A1%8C1-4400.jpg"
+            },
+            {
+                id: 10, name: "", district: "士林區", tags: ["澳式咖啡", "咖啡冠軍", "清新森系"],
+                category: "", feature: "澳洲精品咖啡「LEIBLE COFFEE」登台首店",
+                desc: "採用獨棟裝潢，延續品牌標誌性的鼠尾草綠搭配及多層舒適空間，賦予店內慢悠愜意的氛圍，為咖啡愛好者打造台北全新咖啡文化集散地！", low_cost: "一杯飲品",
+                notice: "台北限定菜單，冰奶油咖啡、季節限定的荔枝冷萃咖啡", hours: "每日 11:00-19:00",
+                address: "台北市士林區文林路294號", image: "https://hips.hearstapps.com/hmg-prod/images/c-66ac808293441.jpg?crop=1.00xw:1.00xh;0,0&resize=1400:*"
+            },
+            {
+                id: 11, name: "", district: "士林區", tags: ["澳式咖啡", "咖啡冠軍", "清新森系"],
+                category: "", feature: "澳洲精品咖啡「LEIBLE COFFEE」登台首店",
+                desc: "採用獨棟裝潢，延續品牌標誌性的鼠尾草綠搭配及多層舒適空間，賦予店內慢悠愜意的氛圍，為咖啡愛好者打造台北全新咖啡文化集散地！", low_cost: "一杯飲品",
+                notice: "台北限定菜單，冰奶油咖啡、季節限定的荔枝冷萃咖啡", hours: "每日 11:00-19:00",
+                address: "台北市士林區文林路294號", image: "https://hips.hearstapps.com/hmg-prod/images/c-66ac808293441.jpg?crop=1.00xw:1.00xh;0,0&resize=1400:*"
+            },
+            {
+                id: 12, name: "", district: "士林區", tags: ["澳式咖啡", "咖啡冠軍", "清新森系"],
+                category: "", feature: "澳洲精品咖啡「LEIBLE COFFEE」登台首店",
+                desc: "採用獨棟裝潢，延續品牌標誌性的鼠尾草綠搭配及多層舒適空間，賦予店內慢悠愜意的氛圍，為咖啡愛好者打造台北全新咖啡文化集散地！", low_cost: "一杯飲品",
+                notice: "台北限定菜單，冰奶油咖啡、季節限定的荔枝冷萃咖啡", hours: "每日 11:00-19:00",
+                address: "台北市士林區文林路294號", image: "https://hips.hearstapps.com/hmg-prod/images/c-66ac808293441.jpg?crop=1.00xw:1.00xh;0,0&resize=1400:*"
+            },
+        ];
+
+        window.cafes = mockCafesData;
+
+        // --- App 初始化與核心邏輯 (已移除 Firebase 依賴) ---
+
+        window.initApp = async () => {
+            loadLocalFavorites(); // 載入本地收藏
+            window.renderAllCafes();
+            window.renderFavoritesSection();
+        };
+
+        window.toggleFavorite = async (cafeId) => {
+            const cafeIdStr = String(cafeId);
+            const cafe = window.cafes.find(c => String(c.id) === cafeIdStr);
+            if (!cafe) return;
+
+            if (window.favorites[cafeIdStr]) {
+                // 移除收藏
+                delete window.favorites[cafeIdStr];
+                window.showMessageBox(`已移除: ${cafe.name}`, "icy-blue");
+            } else {
+                // 新增收藏
+                window.favorites[cafeIdStr] = { 
+                    name: cafe.name, 
+                    category: cafe.category, 
+                    visited: false, 
+                    rating: 0, 
+                    createdAt: new Date().toISOString() 
+                };
+                window.showMessageBox(`已收藏: ${cafe.name}`, "deep-brown");
+            }
+            saveLocalFavorites();
+            window.renderAllCafes();
+            window.renderFavoritesSection();
+        };
+
+        window.updateFavorite = async (cafeId, field, value) => {
+            const cafeIdStr = String(cafeId);
+            if (!window.favorites[cafeIdStr]) return;
+            
+            window.favorites[cafeIdStr][field] = value;
+            saveLocalFavorites();
+            window.renderFavoritesSection();
+            window.showMessageBox("狀態已更新!", "icy-blue");
+        };
+
+        window.createRatingStars = (cafeId, currentRating) => {
+            let html = '';
+            for (let i = 1; i <= 5; i++) {
+                const isChecked = i <= currentRating;
+                // 注意：這裡的 onclick 參數 cafeId 必須是字串，因為 favorites key 是字串
+                html += `<button onclick="window.updateFavorite('${cafeId}', 'rating', ${i})" class="text-xl transition hover:scale-110"><svg class="w-5 h-5 inline-block ${isChecked ? 'text-yellow-500' : 'text-gray-300'}" fill="currentColor" viewBox="0 0 20 20"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.381-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" /></svg></button>`;
+            }
+            return html;
+        };
+
+        const createCafeCard = (cafe) => {
+            const isFavorite = !!window.favorites[cafe.id];
+            const tagsHtml = cafe.tags.map(tag => `<span class="text-xs px-2 py-0.5 rounded-full bg-icy-blue/30 text-deep-brown font-light shadow-sm">${tag}</span>`).join('');
+            const heartIcon = isFavorite 
+                ? `<svg class="w-6 h-6 fill-red-500 stroke-red-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>`
+                : `<svg class="w-6 h-6 stroke-deep-brown" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.054-4.312 2.675-.494 1.024-.265 2.15.717 2.992l1.624 1.432c.515.467.515 1.196 0 1.663L11.75 16.92c-.982.842-1.211 1.968-.717 2.992.715 1.621 2.377 2.675 4.312 2.675 2.589 0 4.688-2.015 4.688-4.5z"/></svg>`;
+
+            return `
+                <div class="cafe-card bg-white rounded-xl overflow-hidden shadow-lg hover:shadow-xl transition-all duration-300 ease-in-out transform hover:-translate-y-1" data-id="${cafe.id}">
+                    <div class="h-40 overflow-hidden relative">
+                        <img src="${cafe.image}" alt="" class="w-full h-full object-cover transition duration-500 hover:scale-105" onerror="this.onerror=null;this.src='https://placehold.co/800x600/4A2E2A/A9D7E0?text=Quiet+Focus';">
+                        <button onclick="window.toggleFavorite(${cafe.id})" class="absolute top-3 right-3 p-1 rounded-full bg-white/70 backdrop-blur-sm hover:bg-white transition-colors" aria-label="Toggle favorite">
+                            ${heartIcon}
+                        </button>
+                    </div>
+                    <div class="p-4 flex flex-col space-y-2">
+                        <!-- 店名：改用 Serif 字體，加粗 -->
+                        <h3 class="text-xl font-bold font-serif text-deep-brown tracking-wide">${cafe.name}</h3>
+                        <div class="flex flex-wrap gap-1.5">${tagsHtml}</div>
+                        <p class="text-sm text-gray-600 italic mt-1">${cafe.feature}</p>
+                        <button onclick="window.showDetailsModal(${cafe.id})" class="mt-3 w-full py-2 bg-icy-blue text-deep-brown rounded-lg font-light hover:bg-icy-blue/80 shadow-md">查看詳細資訊</button>
+                    </div>
+                </div>
+            `;
+        };
+
+        window.renderAllCafes = (filterText = '') => {
+            const categories = ["特色飲品", "拍照打卡", "讀書辦公", "聊天聚會"];
+            const container = document.getElementById('category-display-container');
+            container.innerHTML = '';
+            
+            const filteredCafes = window.cafes.filter(cafe => {
+                if (!filterText) return true;
+                const lowerCaseFilter = filterText.toLowerCase();
+                const searchableText = `${cafe.name} ${cafe.district} ${cafe.tags.join(' ')} ${cafe.feature}`.toLowerCase();
+                return searchableText.includes(lowerCaseFilter);
+            });
+
+            if (filteredCafes.length === 0) {
+                 container.innerHTML = `<p class="col-span-full text-center py-10 text-xl text-deep-brown/70 font-serif">抱歉，找不到符合「${filterText}」的咖啡廳。</p>`;
+                return;
+            }
+
+            if (filterText) {
+                let listHtml = filteredCafes.map(createCafeCard).join('');
+                container.innerHTML = `
+                    <div class="col-span-full mb-8">
+                        <h2 class="text-3xl font-bold font-serif text-deep-brown border-b-2 border-icy-blue pb-2 mb-6">搜尋結果 (${filteredCafes.length})</h2>
+                    </div>
+                    <div class="col-span-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">${listHtml}</div>
+                `;
+                return;
+            }
+            
+            categories.forEach(category => {
+                const categoryCafes = filteredCafes.filter(cafe => cafe.category === category);
+                if (categoryCafes.length > 0) {
+                    let cardsHtml = categoryCafes.map(createCafeCard).join('');
+                    // 分類標題：改用 Serif 字體，加粗
+                    container.innerHTML += `
+                        <div id="section-${category}" class="col-span-full pt-16 -mt-16">
+                            <h2 class="text-3xl font-bold font-serif text-deep-brown border-b-2 border-icy-blue pb-2 mb-6 tracking-wider">${category}</h2>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">${cardsHtml}</div>
+                        </div>
+                    `;
+                }
+            });
+        };
+        
+        window.renderFavoritesSection = () => {
+            const container = document.getElementById('favorites-content');
+            container.innerHTML = '';
+            
+            // 將 favorites 物件轉換為陣列，並確保 cafe data 存在
+            const favoriteCafes = Object.keys(window.favorites).map(id => {
+                const cafe = window.cafes.find(c => String(c.id) === id);
+                return { ...cafe, ...window.favorites[id], dbId: id };
+            }).filter(c => c.id !== undefined && c.name); // 過濾掉找不到原始資料的收藏
+
+            if (favoriteCafes.length === 0) {
+                container.innerHTML = `<p class="text-center text-gray-500 py-10 font-serif">您的收藏清單是空的，去探索一些咖啡廳吧！</p>`;
+                return;
+            }
+
+            let listHtml = favoriteCafes.map(cafe => {
+                const visitedBg = cafe.visited ? 'bg-deep-brown text-white' : 'bg-white text-deep-brown border border-deep-brown';
+                // 這裡使用 cafe.dbId (即 cafe.id 的字串形式)
+                const ratingStars = window.createRatingStars(cafe.dbId, cafe.rating); 
+                return `
+                    <div class="bg-white rounded-xl p-4 shadow-md flex flex-col md:flex-row justify-between items-start md:items-center space-y-3 md:space-y-0">
+                        <div class="flex-grow">
+                            <!-- 收藏列表店名：Serif, Bold -->
+                            <h4 class="text-xl font-bold font-serif text-deep-brown">${cafe.name} <span class="text-sm font-sans font-light text-gray-500 ml-2">(${cafe.category})</span></h4>
+                            <p class="text-sm text-gray-600 mt-1">${cafe.feature}</p>
+                        </div>
+                        <div class="flex flex-col md:flex-row items-start md:items-center space-y-2 md:space-y-0 md:space-x-4 mt-3 md:mt-0">
+                            <div class="flex items-center space-x-1"><span class="text-sm font-light text-gray-500 mr-2">個人評分:</span>${ratingStars}</div>
+                            <button onclick="window.updateFavorite('${cafe.dbId}', 'visited', ${!cafe.visited})" class="text-sm px-3 py-1 rounded-full transition hover:opacity-80 ${visitedBg}">${cafe.visited ? '已去過' : '標記為已去'}</button>
+                            <button onclick="window.toggleFavorite(${cafe.dbId})" class="text-gray-400 hover:text-red-500"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            container.innerHTML = `<div class="space-y-4">${listHtml}</div>`;
+        };
+
+        window.showDetailsModal = (cafeId) => {
+            const cafe = window.cafes.find(c => c.id === cafeId);
+            if (!cafe) return;
+            const tagsHtml = cafe.tags.map(tag => `<span class="text-sm px-3 py-1 rounded-full bg-icy-blue/50 text-deep-brown font-medium shadow-sm">${tag}</span>`).join('');
+            const isFavorite = !!window.favorites[cafe.id];
+            const heartIcon = isFavorite 
+                ? `<svg class="w-8 h-8 fill-red-500 stroke-red-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>`
+                : `<svg class="w-8 h-8 stroke-deep-brown hover:fill-red-500 hover:stroke-red-500 transition-colors" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.054-4.312 2.675-.494 1.024-.265 2.15.717 2.992l1.624 1.432c.515.467.515 1.196 0 1.663L11.75 16.92c-.982.842-1.211 1.968-.717 2.992.715 1.621 2.377 2.675 4.312 2.675 2.589 0 4.688-2.015 4.688-4.5z"/></svg>`;
+            
+            const content = `
+                <div class="modal-overlay fixed inset-0 z-40 flex items-center justify-center p-4" onclick="window.hideDetailsModal()">
+                    <div class="bg-apricot rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl transform transition-all duration-300" onclick="event.stopPropagation()">
+                        <div class="relative h-64 md:h-80 overflow-hidden rounded-t-2xl">
+                            <img src="${cafe.image}" alt="" class="w-full h-full object-cover" onerror="this.onerror=null;this.src='https://placehold.co/800x600/F5EDE2/4A2E2A?text=Coffee';">
+                            <button onclick="window.toggleFavorite(${cafe.id})" class="absolute top-4 right-4 p-2 rounded-full bg-white/80 hover:bg-white shadow-lg">${heartIcon}</button>
+                            <button onclick="window.hideDetailsModal()" class="absolute top-4 left-4 p-2 rounded-full bg-deep-brown text-white hover:bg-deep-brown/80 shadow-lg"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+                        </div>
+                        <div class="p-6 md:p-10 space-y-6">
+                            <div>
+                                <!-- Modal 店名：Serif, Bold -->
+                                <h2 class="text-4xl font-bold font-serif text-deep-brown mb-2 tracking-wide">${cafe.name}</h2>
+                                <div class="flex flex-wrap gap-2"><span class="text-sm px-3 py-1 rounded-full bg-deep-brown text-white font-medium">${cafe.category}</span>${tagsHtml}</div>
+                            </div>
+                            <div>
+                                <h3 class="text-xl font-bold font-serif text-icy-blue mb-2">簡介</h3>
+                                <p class="text-gray-700 leading-relaxed">${cafe.desc}</p>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-icy-blue pt-4">
+                                <div>
+                                    <h3 class="text-xl font-bold font-serif text-icy-blue mb-2">消費與限制事項</h3>
+                                    <ul class="text-gray-700 space-y-1"><li><span class="font-medium text-deep-brown">低消：</span>${cafe.low_cost}</li><li><span class="font-medium text-deep-brown">注意事項：</span>${cafe.notice}</li></ul>
+                                </div>
+                                <div>
+                                    <h3 class="text-xl font-bold font-serif text-icy-blue mb-2">營業資訊</h3>
+                                    <ul class="text-gray-700 space-y-1">
+                                        <li><span class="font-medium text-deep-brown">營業時間：</span>${cafe.hours}</li>
+                                        <li><span class="font-medium text-deep-brown">地址：</span>${cafe.address}</li>
+                                        <li><a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cafe.address)}" target="_blank" class="text-icy-blue hover:text-deep-brown flex items-center">查看地圖連結 <i data-lucide="external-link" class="w-4 h-4 ml-1"></i></a></li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.getElementById('modal-container').innerHTML = content;
+            lucide.createIcons();
+            document.getElementById('modal-container').classList.remove('hidden');
+        };
+
+        window.hideDetailsModal = () => {
+            document.getElementById('modal-container').classList.add('hidden');
+            document.getElementById('modal-container').innerHTML = '';
+        };
+
+        window.showMessageBox = (message, color) => {
+            const box = document.getElementById('message-box');
+            box.textContent = message;
+            box.className = `fixed top-5 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-full shadow-lg text-white transition-opacity duration-300`;
+            box.classList.remove('hidden', 'bg-deep-brown', 'bg-icy-blue');
+            box.classList.add(color === 'deep-brown' ? 'bg-deep-brown' : 'bg-icy-blue', color === 'icy-blue' ? 'text-deep-brown' : 'text-white');
+            setTimeout(() => { box.classList.add('hidden'); }, 3000);
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            window.initApp(); // 立即初始化 App
+
+            const searchInput = document.getElementById('search-input');
+            const searchButton = document.getElementById('search-button');
+            const handleSearch = () => {
+                const query = searchInput.value.trim();
+                window.renderAllCafes(query);
+                if (query) document.getElementById('category-display-container').scrollIntoView({ behavior: 'smooth', block: 'start' });
+            };
+            searchButton.addEventListener('click', handleSearch);
+            searchInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleSearch(); });
+
+            document.querySelectorAll('a[href^="#section-"], a[href="#favorites-section"], a[href="#hero"]').forEach(link => {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const targetId = this.getAttribute('href').substring(1);
+                    if (targetId === 'hero') { window.scrollTo({ top: 0, behavior: 'smooth' }); window.history.pushState(null, '', this.getAttribute('href')); return; }
+                    const targetElement = document.getElementById(targetId);
+                    if (targetElement) { targetElement.scrollIntoView({ behavior: 'smooth', block: 'start' }); window.history.pushState(null, '', this.getAttribute('href')); }
+                });
+            });
+            
+            let currentIndex = 0;
+            const featuredCafes = [window.cafes[2], window.cafes[1], window.cafes[0]];
+            const carouselContainer = document.getElementById('featured-carousel');
+            const updateCarousel = () => {
+                const cafe = featuredCafes[currentIndex];
+                carouselContainer.innerHTML = `
+                    <div class="p-6 md:p-10 bg-white rounded-xl shadow-lg flex flex-col md:flex-row items-center gap-6 transition-opacity duration-500">
+                        <img src="${cafe.image}" alt="" class="w-full md:w-1/3 h-40 md:h-full object-cover rounded-lg" onerror="this.onerror=null;this.src='https://placehold.co/400x300/F5EDE2/4A2E2A?text=Coffee';">
+                        <div class="flex-grow">
+                            <!-- 精選店家店名：Serif, Bold -->
+                            <h3 class="text-3xl font-bold font-serif text-deep-brown tracking-wide">${cafe.name}</h3>
+                            <p class="text-lg text-gray-700 mt-2">${cafe.feature}</p>
+                            <button onclick="window.showDetailsModal(${cafe.id})" class="mt-4 px-6 py-2 bg-deep-brown text-white rounded-lg font-light hover:bg-deep-brown/80 transition-colors">立即探索</button>
+                        </div>
+                    </div>
+                `;
+                currentIndex = (currentIndex + 1) % featuredCafes.length;
+            };
+            updateCarousel();
+            setInterval(updateCarousel, 7000);
+        });
+    </script>
+
+    <div id="message-box" class="hidden"></div>
+    <div id="modal-container" class="hidden"></div>
+    
+    <header class="sticky top-0 z-30 bg-apricot/95 backdrop-blur-sm shadow-md">
+        <div class="container mx-auto px-4 sm:px-6 py-4 flex justify-between items-center">
+            <!-- Logo：Serif, Bold -->
+            <a href="#hero" class="text-3xl font-bold font-serif text-deep-brown tracking-widest">Mapresso</a>
+            
+            <nav class="hidden md:flex space-x-6">
+                <!-- 導覽列連結字體：Serif, Semibold -->
+                <a href="#section-特色飲品" class="text-deep-brown hover:text-icy-blue font-serif font-semibold tracking-wide">特色飲品</a>
+                <a href="#section-拍照打卡" class="text-deep-brown hover:text-icy-blue font-serif font-semibold tracking-wide">拍照打卡</a>
+                <a href="#section-讀書辦公" class="text-deep-brown hover:text-icy-blue font-serif font-semibold tracking-wide">讀書辦公</a>
+                <a href="#section-聊天聚會" class="text-deep-brown hover:text-icy-blue font-serif font-semibold tracking-wide">聊天聚會</a>
+                <a href="#favorites-section" class="text-deep-brown hover:text-icy-blue font-serif font-semibold tracking-wide flex items-center">
+                    <i data-lucide="heart" class="w-4 h-4 mr-1"></i>我的收藏
+                </a>
+            </nav>
+
+            <div class="md:hidden">
+                <a href="#favorites-section" class="text-deep-brown hover:text-icy-blue font-medium flex items-center">
+                    <i data-lucide="heart" class="w-5 h-5"></i>
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <main class="container mx-auto px-4 sm:px-6 py-12 space-y-20">
+        <section id="hero" class="text-center pt-8 pb-16">
+            <!-- 主標題：Serif, Bold -->
+            <!-- 修正字體大小：普遍調小一階，確保在所有螢幕尺寸下保持單行顯示 -->
+            <h1 class="text-3xl sm:text-3xl md:text-4xl lg:text-5xl font-bold font-serif text-deep-brown tracking-widest mb-4 leading-tight">
+                一鍵抵達，你想找的那間咖啡廳。
+            </h1>
+            <p class="text-xl text-gray-600 mb-8 font-light">根據風格、地點、需求，即刻找到最符合的咖啡廳。</p>
+            
+            <div class="max-w-xl mx-auto flex shadow-xl rounded-full overflow-hidden bg-white">
+                <input type="text" id="search-input" placeholder="輸入地區、特色、店名..." class="w-full px-6 py-3 text-lg font-light text-deep-brown bg-transparent focus:outline-none">
+                <button id="search-button" class="bg-deep-brown text-white px-6 py-3 hover:bg-deep-brown/90"><i data-lucide="search" class="w-6 h-6"></i></button>
+            </div>
+
+            <nav class="md:hidden mt-8 flex flex-wrap justify-center gap-3">
+                <a href="#section-特色飲品" class="px-4 py-2 bg-icy-blue/70 text-deep-brown rounded-full text-sm font-medium">特色飲品</a>
+                <a href="#section-拍照打卡" class="px-4 py-2 bg-icy-blue/70 text-deep-brown rounded-full text-sm font-medium">拍照打卡</a>
+                <a href="#section-讀書辦公" class="px-4 py-2 bg-icy-blue/70 text-deep-brown rounded-full text-sm font-medium">讀書辦公</a>
+                <a href="#section-聊天聚會" class="px-4 py-2 bg-icy-blue/70 text-deep-brown rounded-full text-sm font-medium">聊天聚會</a>
+            </nav>
+        </section>
+        
+        <section>
+            <!-- 小標題：Serif, Semibold -->
+            <h2 class="text-3xl font-semibold font-serif text-deep-brown text-center mb-8 tracking-wide">今天適合這樣的咖啡味。</h2>
+            <div id="featured-carousel" class="w-full max-w-4xl mx-auto"></div>
+        </section>
+
+        <section id="favorites-section" class="pt-16 -mt-16">
+            <h2 class="text-3xl font-bold font-serif text-deep-brown border-b-2 border-deep-brown pb-2 mb-6 flex items-center tracking-wide">
+                <i data-lucide="heart" class="w-6 h-6 mr-2 fill-deep-brown stroke-deep-brown"></i>我的收藏
+            </h2>
+            <div id="favorites-content" class="min-h-[150px]">
+                <p class="text-center text-gray-500 py-10">正在載入本裝置的收藏資料...</p>
+            </div>
+        </section>
+
+        <section>
+            <div class="grid grid-cols-1 gap-12" id="category-display-container">
+                <p class="text-center text-gray-500 py-10">咖啡廳資料載入中...</p>
+            </div>
+        </section>
+    </main>
+    
+    <footer class="bg-deep-brown mt-12 py-10">
+        <div class="container mx-auto px-4 sm:px-6 text-center text-apricot">
+            <!-- 頁尾標語：Serif, Bold -->
+            <p class="text-2xl font-bold font-serif mb-4 tracking-wide">在雙北，把咖啡與生活連成一張地圖。</p>
+            <div class="space-y-1 text-sm font-light text-apricot/80">
+                <p>聯絡方式：contact@coffeemap.tw</p>
+                <p>版權所有 © 2025 Mapresso</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>lucide.createIcons();</script>
+</body>
+</html>
